@@ -10,6 +10,11 @@
 class wavetable;
 class LFO;
 
+static inline float mapfloat(float x, float in_min, float in_max, float out_min, float out_max)
+{
+	return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
 struct note{
 	byte channel;
 	byte pitch;
@@ -62,6 +67,7 @@ public:
 	uint16_t DEPTH_BASE = 0;
 	int DEPTH_NET = 0;
 	volatile uint8_t POS = 0;
+	uint8_t AMT = 1;
 	
 	signed short values[LFO_NUM_VALUES];
 	
@@ -72,11 +78,12 @@ public:
 	uint8_t waveform_number = 2;
 	
 	int mapMax = 32767;
+	float maxFreq = 20.0;
 	
 	bool active(){ return ACTIVE; }
 	
-	void setRate(uint16_t freq){
-		RATE_BASE = freq;
+	void setRate(uint8_t val){
+		RATE_BASE = map(val, 0, 127, 0, maxFreq * LFO_NUM_VALUES);
 		UPDATE_BITS.rate = true;
 	}
 	
@@ -86,7 +93,7 @@ public:
 	}
 	
 	void process(){
-		POS++;
+		POS+=AMT;
 		CURRENT_VALUE = map(values[POS], -32768, 32767, 0 - depth, depth);
 	}
 	
@@ -126,8 +133,12 @@ public:
 			UPDATE_BITS.depth = false;
 		}
 		if(UPDATE_BITS.rate){
-			uint16_t rate = constrain(RATE_BASE + RATE_NET, 0, LFO_MAX_FREQ * LFO_NUM_VALUES);
-			setTimerFreq(TC, rate);
+			uint16_t maxRate = maxFreq * LFO_NUM_VALUES;
+			uint16_t rate = constrain(RATE_BASE + RATE_NET, 0, maxRate);
+			float freq = mapfloat(rate, 0, maxRate, 0.0, (float)maxFreq);
+			AMT = ((rate >> 8) + 1);
+			uint16_t samples = (uint16_t)LFO_NUM_VALUES / AMT;
+			setTimerFreq(TC, freq * samples);
 			UPDATE_BITS.rate = false;
 		}
 	}
@@ -150,6 +161,7 @@ private:
 class cv : public LFO_TARGET {
 	public:
 	cv() : LFO_TARGET() {};
+	cv(const uint16_t *values) : LFO_TARGET(), values(values) {};
 	cv(uint16_t low, uint16_t high) : LFO_TARGET(), low(low), high(high) {};
 	~cv() {};
 	
@@ -159,10 +171,19 @@ class cv : public LFO_TARGET {
 	
 	uint16_t low = 0;
 	uint16_t high = 4095;
+	const uint16_t *values = NULL;
 	
 	void setBase(uint8_t base){
 		BASE = map(base, 0, 127, low, high);
 		UPDATE = true;
+	}
+	
+	uint16_t getCurrentValue(){
+		if(this->values != NULL){
+			uint8_t ix = constrain(map(this->BASE + this->NET, 0, 4095, 0, 127), 0, 127);
+			return this->values[ix];
+		}
+		else return constrain(this->BASE + this->NET, this->low, this->high);
 	}
 };
 

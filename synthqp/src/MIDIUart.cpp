@@ -27,9 +27,6 @@ MIDI_Class::~MIDI_Class() {}
 void MIDI_Class::Start(uint8_t prio) {
 	QActive::start(prio, m_evtQueueStor, ARRAY_COUNT(m_evtQueueStor), NULL, 0);
 	
-	// Initialise the Serial port
-	USE_SERIAL_PORT.begin(MIDI_BAUDRATE);
-		
 	mInputChannel = MIDI_CHANNEL_OMNI;
 	mRunningStatus_RX = InvalidType;
 	mPendingMessageIndex = 0;
@@ -77,6 +74,11 @@ QState MIDI_Class::Root(MIDI_Class * const me, QEvt const * const e) {
 			status = Q_HANDLED();
 			break;
 		}
+		case MIDI_UART_DATA_READY:{
+			//ignore
+			status = Q_HANDLED();
+			break;
+		}
 		default: {
 			status = Q_SUPER(&QHsm::top);
 			break;
@@ -108,6 +110,8 @@ QState MIDI_Class::Stopped(MIDI_Class * const me, QEvt const * const e) {
 		}
 		case MIDI_UART_START_REQ: {
 			LOG_EVENT(e);
+			// Initialise the Serial port
+			USE_SERIAL_PORT.begin(MIDI_BAUDRATE);
 			Evt const &req = EVT_CAST(*e);
 			Evt *evt = new MIDIUARTStartCfm(req.GetSeq(), ERROR_SUCCESS);
 			QF::PUBLISH(evt, me);

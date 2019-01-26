@@ -10,7 +10,8 @@ Q_DEFINE_THIS_FILE
 
 FPGA::FPGA() :
 QActive((QStateHandler)&FPGA::InitialPseudoState),
-m_id(FPGA_ID), m_name("FPGA"), settings(4000000, MSBFIRST, SPI_MODE0) {}
+m_id(FPGA_ID), m_name("FPGA"), settings(4000000, MSBFIRST, SPI_MODE0),
+m_startTimer(this, FPGA_START_TIMER) {}
 
 FPGA::~FPGA() {}
 
@@ -40,6 +41,7 @@ QState FPGA::InitialPseudoState(FPGA * const me, QEvt const * const e) {
 	me->subscribe(FPGA_SET_PORTAMENTO_REQ);
 	me->subscribe(FPGA_SET_ENABLE_REQ);
 	me->subscribe(FPGA_WRITE_VOL_REQ);
+	me->subscribe(FPGA_START_TIMER);
 	
 	me->subscribe(FLASH_CONFIG_READ_TO_LISTENER_DONE);
 	
@@ -90,6 +92,7 @@ QState FPGA::Stopped(FPGA * const me, QEvt const * const e) {
 		}
 		case Q_EXIT_SIG: {
 			LOG_EVENT(e);
+			me->m_startTimer.disarm();
 			status = Q_HANDLED();
 			break;
 		}
@@ -101,12 +104,8 @@ QState FPGA::Stopped(FPGA * const me, QEvt const * const e) {
 			status = Q_HANDLED();
 			break;
 		}
-		case FPGA_START_REQ: {
+		case FPGA_START_TIMER: {
 			LOG_EVENT(e);
-			
-			digitalWrite(CRESET_B, HIGH);
-			
-			delay(1000);
 			
 			if(digitalRead(CDONE)){
 				SPI.begin();
@@ -120,6 +119,17 @@ QState FPGA::Stopped(FPGA * const me, QEvt const * const e) {
 				//TODO: fail here
 				__BKPT();
 			}
+			break;
+		}
+		case FPGA_START_REQ: {
+			LOG_EVENT(e);
+			
+			digitalWrite(CRESET_B, HIGH);
+			
+			me->m_startTimer.armX(1000);
+			
+			status = Q_HANDLED();
+			
 			break;
 		}
 		default: {
@@ -137,7 +147,7 @@ QState FPGA::Started(FPGA * const me, QEvt const * const e) {
 			LOG_EVENT(e);
 			
 			//make sure the filter starts up
-			me->writeReg(FPGA_PWM0, 4095);
+			me->writeReg(FPGA_PWM0, 2048);
 			me->writeReg(FPGA_ENABLE, 0);
 			me->writeReg(FPGA_W0_FREQ, 0);
 			me->writeReg(FPGA_W1_FREQ, 0);
@@ -216,8 +226,8 @@ QState FPGA::Started(FPGA * const me, QEvt const * const e) {
 		case FPGA_SET_PORTAMENTO_REQ:{
 			LOG_EVENT(e);
 			FPGASetPortamentoReq const &req = static_cast<FPGASetPortamentoReq const &>(*e);
-
-			me->writeReg(FPGA_PORT, req.getPrescale());
+			
+			me->writeReg(FPGA_PORT, max(req.getPrescale(), 1));
 			status = Q_HANDLED();
 			break;
 		}
@@ -336,21 +346,23 @@ QState FPGA::WritingWave(FPGA * const me, QEvt const * const e) {
 void FPGA::writeReg(uint8_t reg, uint16_t value){
 	uint16_t Byte1 = FPGA_RW_BIT(1) | FPGA_REG_MASK(reg);
 	
-	QF_CRIT_ENTRY();
+	QF_CRIT_STAT_TYPE crit;
+	QF_CRIT_ENTRY(crit);
 	SPI.beginTransaction (settings);
 	digitalWrite(FPGA_CS, LOW);
 	SPI.transfer16(Byte1);
 	SPI.transfer16(value);
 	digitalWrite(FPGA_CS, HIGH);
 	SPI.endTransaction();
-	QF_CRIT_EXIT();
+	QF_CRIT_EXIT(crit);
 }
 
 uint16_t FPGA::readReg(uint8_t reg){
 	uint16_t Byte1 = FPGA_RW_BIT(0) |FPGA_REG_MASK(reg);
 	uint16_t read;
 	
-	QF_CRIT_ENTRY();
+	QF_CRIT_STAT_TYPE crit;
+	QF_CRIT_ENTRY(crit);
 	SPI.beginTransaction (settings);
 	digitalWrite(FPGA_CS, LOW);
 	SPI.transfer16(Byte1);
@@ -363,7 +375,7 @@ uint16_t FPGA::readReg(uint8_t reg){
 	read = SPI.transfer16(0x00);
 	digitalWrite(FPGA_CS, HIGH);
 	SPI.endTransaction();
-	QF_CRIT_EXIT();
+	QF_CRIT_EXIT(crit);
 	
 	return read;
 }
